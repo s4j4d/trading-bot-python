@@ -1,0 +1,6 @@
+# Core dependencies for the cryptocurrency trading bot
+pandas>=2.3.0
+numpy>=1.26.0
+tensorflow==2.18.0  # Stable TensorFlow version (CPU/GPU auto-detected)
+gymnasium>=1.2.0
+psutil>=5.9.0  # For memory monitoring and system resource tracking
