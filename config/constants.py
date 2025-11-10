@@ -12,9 +12,13 @@ of the trading environment, neural network training, and data processing.
 # for capturing short to medium-term market patterns while maintaining efficiency
 WINDOW_SIZE = 50  # Validated for LSTM: sufficient for temporal dependencies
 
+# INITIAL_CRYPTO_BALANCE: float = 0.0
+
 # Starting cash balance for each trading episode (in currency units)
 # Set to 10 million for realistic portfolio simulation
+# INITIAL_FIAT_BALANCE = 10000000.0
 INITIAL_BALANCE = 10000000.0
+
 
 # Transaction fee rate as a decimal (0.003 = 0.3%)
 # Applied to each buy/sell transaction to simulate real trading costs
@@ -32,7 +36,7 @@ MAX_STEPS_PER_EPISODE = 500
 # Number of parallel trading environments to run simultaneously
 # More environments provide diverse experiences but require more memory
 # INCREASED: Using more environments to utilize available CPU/memory resources
-NUM_ENVS = 300
+NUM_ENVS = 500
 
 # Total number of training steps across all environments
 # Higher values lead to better learning but longer training time

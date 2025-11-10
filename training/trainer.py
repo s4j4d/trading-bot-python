@@ -270,7 +270,7 @@ def train_trading_bot():
             # Calculate current exploration probability (epsilon) using linear decay
             # Starts high for exploration, decreases over time for exploitation
             # epsilon = linear_decay(total_done_steps, EPSILON_DECAY_TIMESTEPS, EPSILON_START, EPSILON_END)
-            epsilon = EPSILON_END
+            epsilon = 0.2
 
             if np.random.rand() < epsilon:
                 # Exploration: Take random actions to discover new strategies
