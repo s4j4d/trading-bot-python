@@ -78,9 +78,11 @@ class CryptoTradingEnv(gym.Env):
         # Action space: 0=Hold, 1=Buy, 2=Sell
         self.action_space = spaces.Discrete(3)
         
-        # Observation space: window of historical prices
+        # Observation space: window of historical OHLCV data
+        # Shape: (window_size, 5) for natural 2D structure [timesteps, features]
+        # This is more efficient than flattening - no need to reshape later!
         self.observation_space = spaces.Box(
-            low=0, high=np.inf, shape=(self.window_size,), dtype=np.float32
+            low=0, high=np.inf, shape=(self.window_size, 5), dtype=np.float32
         )
 
         # Trading state variables (initialized here, set in reset())
@@ -211,35 +213,57 @@ class CryptoTradingEnv(gym.Env):
         return float(self.df.iloc[safe_step]['close'])
 
     def _get_observation(self):
+         """
+         Get observation with all OHLCV features for better market understanding.
+         
+         Returns:
+             np.ndarray: Flattened array of normalized OHLCV data
+                        Shape: (window_size * 5,) containing [open, high, low, close, volume]
+         """
          # Ensure index is within bounds for observation window
          safe_step = min(self.current_step, len(self.df) - 1)
          end_idx = safe_step + 1
          start_idx = max(0, end_idx - self.window_size)
-         raw_prices = self.df['close'].values[start_idx:end_idx]
+         
+         # Extract all OHLCV features
+         raw_data = self.df[['open', 'high', 'low', 'close', 'volume']].values[start_idx:end_idx]
 
          # Handle cases where data starts before window size is reached
-         if len(raw_prices) < self.window_size:
-             padding_value = self.df['close'].iloc[0] if len(self.df) > 0 else 0
-             padding_value = float(padding_value)
-             padding = np.full(self.window_size - len(raw_prices), padding_value, dtype=np.float64)
-             raw_prices = raw_prices.astype(np.float64)
-             raw_prices = np.concatenate((padding, raw_prices))
+         if len(raw_data) < self.window_size:
+             # Use first row for padding
+             padding_row = self.df[['open', 'high', 'low', 'close', 'volume']].iloc[0].values if len(self.df) > 0 else np.zeros(5)
+             padding_row = padding_row.astype(np.float64)
+             padding = np.tile(padding_row, (self.window_size - len(raw_data), 1))
+             raw_data = raw_data.astype(np.float64)
+             raw_data = np.vstack((padding, raw_data))
 
          # --- Normalization ---
-         last_price = raw_prices[-1]
-         if last_price > 1e-8:
-             normalized_prices = raw_prices / last_price
+         # Normalize prices by last close price, volume by its own max
+         last_close = raw_data[-1, 3]  # Last close price (index 3)
+         
+         if last_close > 1e-8:
+             # Normalize OHLC by last close price
+             normalized_data = raw_data.copy()
+             normalized_data[:, :4] = raw_data[:, :4] / last_close  # Normalize open, high, low, close
+             
+             # Normalize volume separately (by max volume in window to keep scale reasonable)
+             max_volume = np.max(raw_data[:, 4])
+             if max_volume > 1e-8:
+                 normalized_data[:, 4] = raw_data[:, 4] / max_volume
+             else:
+                 normalized_data[:, 4] = 0.0
          else:
-             normalized_prices = np.zeros_like(raw_prices)
+             normalized_data = np.zeros_like(raw_data)
              # Avoid warning spamming at the very beginning if initial prices are zero
              if safe_step >= self.window_size:
                   warnings.warn(f"Near-zero price encountered at step {safe_step}, observation may be unreliable.", RuntimeWarning)
 
-         if len(normalized_prices) != self.window_size:
-              # This should theoretically not happen with the padding, but good failsafe
-              raise ValueError(f"Observation shape incorrect at step {self.current_step}. Expected {self.window_size}, got {len(normalized_prices)}")
+         # Return as 2D array: natural shape (window_size, 5)
+         # No need to flatten - more efficient and clearer!
+         if normalized_data.shape != (self.window_size, 5):
+              raise ValueError(f"Observation shape incorrect at step {self.current_step}. Expected ({self.window_size}, 5), got {normalized_data.shape}")
 
-         return normalized_prices.astype(np.float32)
+         return normalized_data.astype(np.float32)
 
     def _get_info(self):
         """

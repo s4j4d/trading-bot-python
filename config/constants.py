@@ -10,7 +10,8 @@ of the trading environment, neural network training, and data processing.
 # Number of historical price points to include in each observation
 # Optimized for LSTM temporal learning - provides sufficient sequence length
 # for capturing short to medium-term market patterns while maintaining efficiency
-WINDOW_SIZE = 50  # Validated for LSTM: sufficient for temporal dependencies
+# REDUCED for high-frequency trading: shorter memory for faster reactions
+WINDOW_SIZE = 30  # Shorter window for day trading: focus on recent price action
 
 # INITIAL_CRYPTO_BALANCE: float = 0.0
 
@@ -71,7 +72,9 @@ LEARNING_STEPS = 8  # Reduced frequency for faster training
 
 # Discount factor for future rewards in Q-learning
 # Values closer to 1 make the agent consider long-term rewards more heavily
-GAMMA = 0.99
+# LOWERED for high-frequency trading: focus on short-term volatility profits
+# 0.3-0.5 = day trading (immediate rewards), 0.7-0.85 = swing trading, 0.99 = long-term
+GAMMA = 0.4  # Optimized for catching small price swings and frequent trading
 
 # --- Epsilon-greedy Exploration Parameters ---
 # Starting probability of taking random actions (exploration)
@@ -79,8 +82,8 @@ GAMMA = 0.99
 EPSILON_START = 1.0
 
 # Final probability of taking random actions after decay
-# Low values ensure the agent mostly exploits learned knowledge
-EPSILON_END = 0.05
+# INCREASED for active trading: maintain some exploration to find trading opportunities
+EPSILON_END = 0.15  # Higher than 0.05 to encourage more trading activity
 
 # Number of timesteps over which to decay epsilon from start to end
 # Decay over 75% of total training time, then maintain minimum exploration

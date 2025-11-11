@@ -106,9 +106,14 @@ def load_data_from_json(json_file_path):
         df.sort_index(inplace=True)
 
         print(f"Successfully processed {len(df)} data points from {json_file_path}.")
-        print("skipping the first 1000 used in the previous training")
-        
-        return df[1000:]
+         
+        # Only skip rows if we have enough data
+        if len(df) > 1000:
+            print("Skipping the first 1000 rows (used in previous training)")
+            return df[1000:]
+        else:
+            print(f"Dataset has only {len(df)} rows - using all data (no skipping)")
+            return df
 
     except json.JSONDecodeError as e:
         print(f"Error decoding JSON from file {json_file_path}: {e}")

@@ -14,7 +14,7 @@ Usage:
     from model import build_q_network
     
     # Build a Q-network for trading
-    q_net = build_q_network(input_shape=(50,), action_size=3)
+    q_net = build_q_network(input_shape=(30,), action_size=3)
 """
 
 from .q_network import build_q_network

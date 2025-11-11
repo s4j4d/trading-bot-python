@@ -68,7 +68,7 @@ def _validate_input_shape(input_shape):
     and memory requirements.
     
     Args:
-        input_shape (tuple): Shape of the input observations
+        input_shape (tuple): Shape of the input observations (window_size, num_features)
         
     Raises:
         ValueError: If input shape is not compatible with LSTM processing
@@ -79,17 +79,25 @@ def _validate_input_shape(input_shape):
         raise TypeError(f"Input shape must be a tuple, got {type(input_shape).__name__}")
     
     # Dimensionality validation for LSTM compatibility
-    if len(input_shape) != 1:
+    if len(input_shape) != 2:
         raise ValueError(
-            f"Expected 1D input shape for LSTM processing (window_size,), got {len(input_shape)}D shape: {input_shape}. "
-            f"LSTM models expect a flat observation window that will be reshaped internally."
+            f"Expected 2D input shape for LSTM processing (window_size, num_features), got {len(input_shape)}D shape: {input_shape}. "
+            f"LSTM models expect observations as (timesteps, features)."
         )
     
-    # Extract and validate window size
+    # Extract and validate dimensions
     try:
         window_size = int(input_shape[0])
+        num_features = int(input_shape[1])
     except (ValueError, TypeError) as e:
-        raise TypeError(f"Window size must be an integer, got {type(input_shape[0]).__name__}: {input_shape[0]}")
+        raise TypeError(f"Input shape dimensions must be integers, got {input_shape}")
+    
+    # Validate number of features
+    if num_features != 5:
+        raise ValueError(
+            f"Expected 5 features (OHLCV), got {num_features}. "
+            f"Input shape should be (window_size, 5)"
+        )
     
     # Window size range validation for LSTM temporal learning
     if window_size < 1:
@@ -116,11 +124,11 @@ def _validate_input_shape(input_shape):
         print(f"WARNING: Window size {window_size} is above optimal range (20-100) and may impact training efficiency.")
     
     # Memory usage estimation and warning
-    estimated_memory_mb = (window_size * 4 * 128) / (1024 * 1024)  # Rough estimate for batch processing
+    estimated_memory_mb = (window_size * num_features * 4 * 128) / (1024 * 1024)  # Rough estimate for batch processing
     if estimated_memory_mb > 100:
-        print(f"WARNING: Large window size ({window_size}) may require significant memory (~{estimated_memory_mb:.1f}MB per batch)")
+        print(f"WARNING: Large input size ({window_size}, {num_features}) may require significant memory (~{estimated_memory_mb:.1f}MB per batch)")
     
-    print(f"Input shape validation passed: {input_shape} (window_size={window_size})")
+    print(f"Input shape validation passed: {input_shape} (window_size={window_size}, features={num_features})")
 
 
 def _create_lstm_model(input_shape, action_size):
@@ -131,7 +139,7 @@ def _create_lstm_model(input_shape, action_size):
     with built-in safeguards against exploding gradients and memory issues.
     
     Args:
-        input_shape (tuple): Shape of the input observations
+        input_shape (tuple): Shape of the input observations (window_size, num_features)
         action_size (int): Number of possible actions
         
     Returns:
@@ -141,21 +149,27 @@ def _create_lstm_model(input_shape, action_size):
         ValueError: If model creation fails due to invalid parameters
         tf.errors.ResourceExhaustedError: If insufficient memory for model creation
     """
+    # Extract window size and number of features from input shape
+    # Input shape is (window_size, num_features) where num_features = 5 (OHLCV)
     window_size = input_shape[0]
+    num_features = input_shape[1]
+    
+    print(f"Model input configuration: window_size={window_size}, num_features={num_features}")
     
     try:
         # Validate LSTM configuration parameters before model creation
         _validate_lstm_configuration()
         
         # Estimate memory requirements and adjust architecture if needed
-        estimated_params = _estimate_model_parameters(window_size, action_size)
+        estimated_params = _estimate_model_parameters(window_size, action_size, num_features)
         print(f"Estimated model parameters: {estimated_params:,}")
         
         # Create model with memory-efficient LSTM configuration using constants
+        # No reshape needed! Input is already in correct shape (window_size, num_features)
         model = tf.keras.Sequential([
-            # Input reshaping layer: convert flat observation window to 3D tensor for LSTM processing
-            # Input: (batch_size, WINDOW_SIZE) -> Output: (batch_size, WINDOW_SIZE, 1)
-            layers.Reshape((window_size, 1), input_shape=input_shape, name='input_reshape'),
+            
+            # Input layer to define shape explicitly (no reshape needed!)
+            layers.Input(shape=input_shape, name='input_layer'),
             
             # First LSTM layer: configurable units with return_sequences=True to pass full sequence to next layer
             # Use recurrent_dropout for additional regularization in LSTM cells
@@ -274,7 +288,7 @@ def _validate_lstm_configuration():
     print("LSTM configuration validation passed - all parameters are within recommended ranges")
 
 
-def _estimate_model_parameters(window_size, action_size):
+def _estimate_model_parameters(window_size, action_size, num_features=5):
     """
     Estimates the number of parameters in the LSTM model for memory planning.
     Uses configurable LSTM layer sizes for accurate parameter estimation.
@@ -282,13 +296,14 @@ def _estimate_model_parameters(window_size, action_size):
     Args:
         window_size (int): Size of the input sequence
         action_size (int): Number of output actions
+        num_features (int): Number of input features per timestep (default: 5 for OHLCV)
         
     Returns:
         int: Estimated number of model parameters
     """
-    # LSTM layer 1: configurable units with input size 1
+    # LSTM layer 1: configurable units with input size = num_features (OHLCV)
     # 4 gates * units * (input_size + hidden_size + bias)
-    lstm1_params = 4 * LSTM_LAYER_1_UNITS * (1 + LSTM_LAYER_1_UNITS + 1)
+    lstm1_params = 4 * LSTM_LAYER_1_UNITS * (num_features + LSTM_LAYER_1_UNITS + 1)
     
     # LSTM layer 2: configurable units with input size from layer 1
     lstm2_params = 4 * LSTM_LAYER_2_UNITS * (LSTM_LAYER_1_UNITS + LSTM_LAYER_2_UNITS + 1)

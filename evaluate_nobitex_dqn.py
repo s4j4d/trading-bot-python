@@ -49,9 +49,9 @@ class NobitexConfig:
     MAX_RETRIES: int = 3
     
     # Trading parameters from constants.py
-    # INITIAL_FIAT_BALANCE: float = INITIAL_FIAT_BALANCE
-    INITIAL_BALANCE: float = INITIAL_BALANCE
-    # INITIAL_CRYPTO_BALANCE: float = 0.0
+    INITIAL_BALANCE: float = INITIAL_BALANCE  # Total initial balance (for backward compatibility)
+    INITIAL_FIAT_BALANCE: float = INITIAL_BALANCE  # Initial IRT/Toman balance
+    INITIAL_CRYPTO_BALANCE: float = 0.0  # Initial crypto holdings (0 = start with fiat only)
     FEE_RATE: float = FEE_RATE
     SLIPPAGE_FACTOR: float = SLIPPAGE_FACTOR
     WINDOW_SIZE: int = WINDOW_SIZE
@@ -320,18 +320,31 @@ class NobitexDataFetcher:
         df['rsi'] = calculate_rsi(df['close'].values)
         df['macd'] = calculate_macd(df['close'].values)
         
-        # Select features for model - using only close prices to match model architecture
-        # The LSTM model was trained on normalized close prices only
-        features = ['close']  # Only close prices for now
+        # Select all OHLCV features for comprehensive market analysis
+        # The LSTM model uses all features for better trading decisions
+        features = ['open', 'high', 'low', 'close', 'volume']
         feature_data = df[features].values
         
-        # Normalize features using z-score normalization (mean=0, std=1)
-        # This replaces sklearn.StandardScaler to avoid external dependency
-        mean = np.mean(feature_data, axis=0)
-        std = np.std(feature_data, axis=0)
-        # Avoid division by zero for constant features
-        std = np.where(std == 0, 1, std)
-        normalized_features = (feature_data - mean) / std
+        # Normalize features: OHLC by last close, volume by max volume
+        # This matches the environment's normalization strategy
+        normalized_features = np.zeros_like(feature_data, dtype=np.float32)
+        
+        for i in range(len(feature_data)):
+            # Get current close price for normalization
+            current_close = feature_data[i, 3]  # Close is at index 3
+            
+            if current_close > 1e-8:
+                # Normalize OHLC by current close price
+                normalized_features[i, :4] = feature_data[i, :4] / current_close
+                
+                # Normalize volume by max volume in dataset
+                max_volume = np.max(feature_data[:, 4])
+                if max_volume > 1e-8:
+                    normalized_features[i, 4] = feature_data[i, 4] / max_volume
+                else:
+                    normalized_features[i, 4] = 0.0
+            else:
+                normalized_features[i, :] = 0.0
         
         # Create a simple scaler object for consistency
         class SimpleScaler:
@@ -343,7 +356,7 @@ class NobitexDataFetcher:
         
         print(f"Features prepared: {features}")
         print(f"Feature shape: {normalized_features.shape}")
-        print(f"Note: Using only close prices to match LSTM model architecture")
+        print(f"Note: Using all OHLCV features for comprehensive market analysis")
         
         return normalized_features, scaler
 
@@ -382,8 +395,8 @@ class NobitexBacktester:
     
     def reset(self):
         """Reset backtester state for new run"""
-        self.balance = self.config.INITIAL_BALANCE
-        self.position = 0.0  # Crypto holdings
+        self.balance = self.config.INITIAL_FIAT_BALANCE  # Start with fiat balance
+        self.position = self.config.INITIAL_CRYPTO_BALANCE  # Start with crypto holdings
         self.equity_curve = []
         self.trade_log = []
         self.current_step = 0
@@ -483,23 +496,31 @@ class NobitexBacktester:
         
         # Initialize with starting portfolio value
         initial_price = df.iloc[start_idx]['close']
-        initial_portfolio_value = self.config.INITIAL_BALANCE
+        
+        # Calculate initial portfolio value from fiat + crypto holdings
+        initial_portfolio_value = self.config.INITIAL_FIAT_BALANCE + (self.config.INITIAL_CRYPTO_BALANCE * initial_price)
         
         # Track equity curve and HODL benchmark
         equity_curve = [initial_portfolio_value]
         hodl_curve = [initial_portfolio_value]
         
-        # HODL benchmark: buy and hold from start
+        # HODL benchmark: buy and hold from start (convert all to crypto)
         hodl_crypto_amount = initial_portfolio_value / initial_price
         
-        print(f"Initial setup: Starting with {self.config.INITIAL_BALANCE:,.0f} IRT cash")
-        print(f"Initial price: {initial_price:.0f} IRT")
+        print(f"Initial setup:")
+        print(f"  Fiat Balance: {self.config.INITIAL_FIAT_BALANCE:,.0f} IRT")
+        print(f"  Crypto Holdings: {self.config.INITIAL_CRYPTO_BALANCE:.6f} crypto")
+        print(f"  Initial Price: {initial_price:.0f} IRT")
+        print(f"  Total Portfolio Value: {initial_portfolio_value:,.0f} IRT")
         
-        # Force initial buy to give model crypto to trade with
-        print("Forcing initial crypto purchase...")
-        initial_timestamp = df.index[start_idx].strftime('%Y-%m-%d %H:%M:%S')
-        self.execute_trade(1, initial_price, initial_timestamp)  # Force buy action
-        print(f"Initial position: {self.position:.6f} crypto, Balance: {self.balance:.0f} IRT")
+        # Force initial buy if starting with fiat only (for model compatibility)
+        if self.config.INITIAL_CRYPTO_BALANCE == 0.0 and self.config.INITIAL_FIAT_BALANCE > 0:
+            print("\nForcing initial crypto purchase (model needs crypto to trade)...")
+            initial_timestamp = df.index[start_idx].strftime('%Y-%m-%d %H:%M:%S')
+            self.execute_trade(1, initial_price, initial_timestamp)  # Force buy action
+            print(f"After forced buy - Position: {self.position:.6f} crypto, Balance: {self.balance:.0f} IRT")
+        else:
+            print(f"\nStarting with existing position - Position: {self.position:.6f} crypto, Balance: {self.balance:.0f} IRT")
         
         # Track action counts for debugging
         action_counts = {0: 0, 1: 0, 2: 0}  # Hold, Buy, Sell
@@ -514,11 +535,12 @@ class NobitexBacktester:
             if i % 10 == 0:
                 print(f"Processing step {i}/{len(df)-1}, Price: {current_price:.0f}")
             
-            # Prepare state for model (last WINDOW_SIZE close prices)
+            # Prepare state for model (last WINDOW_SIZE OHLCV features)
             if i >= self.config.WINDOW_SIZE:
-                # Extract last WINDOW_SIZE normalized close prices
-                state = features[i-self.config.WINDOW_SIZE:i, 0]  # Take only close prices (first column)
-                state = np.expand_dims(state, axis=0)  # Add batch dimension: (1, WINDOW_SIZE)
+                # Extract last WINDOW_SIZE normalized OHLCV data
+                state = features[i-self.config.WINDOW_SIZE:i, :]  # Shape: (WINDOW_SIZE, 5)
+                state = np.expand_dims(state, axis=0)  # Add batch dimension: (1, WINDOW_SIZE, 5)
+                # No flattening needed! Keep natural 2D structure
                 
                 # Debug: Print state info for first few steps
                 if i <= start_idx + 2:
@@ -862,6 +884,10 @@ Examples:
                        help='Path to trained model file')
     parser.add_argument('--save-plot', type=str, default=None,
                        help='Path to save performance plot')
+    parser.add_argument('--initial-fiat', type=float, default=None,
+                       help=f'Initial fiat balance in IRT (default: {INITIAL_BALANCE:,.0f})')
+    parser.add_argument('--initial-crypto', type=float, default=None,
+                       help='Initial crypto holdings (default: 0.0)')
     
     args = parser.parse_args()
     
@@ -895,8 +921,15 @@ Examples:
         df = data_fetcher.fetch_historical_data(args.pair, args.days)
         features, scaler = data_fetcher.prepare_features(df)
         
-        # Initialize backtester
+        # Initialize backtester with custom initial balances if provided
         config = NobitexConfig()
+        if args.initial_fiat is not None:
+            config.INITIAL_FIAT_BALANCE = args.initial_fiat
+            print(f"Using custom initial fiat balance: {args.initial_fiat:,.0f} IRT")
+        if args.initial_crypto is not None:
+            config.INITIAL_CRYPTO_BALANCE = args.initial_crypto
+            print(f"Using custom initial crypto holdings: {args.initial_crypto:.6f}")
+        
         backtester = NobitexBacktester(model, config)
         
         # Run backtest

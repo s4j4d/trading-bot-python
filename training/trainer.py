@@ -218,7 +218,7 @@ def train_trading_bot():
         print(f"  - Action size: {action_size}")
         print(f"  - Sequence length for temporal learning: {WINDOW_SIZE} time steps")
 
-        # --- Build Networks ---
+        # --- Build Networks --------------------------------------------------------------------------------------------------------------------------------
         # Main Q-network: learns to predict Q-values for state-action pairs
         # This network is updated frequently during training
         q_network = build_q_network(state_shape, action_size)
@@ -253,7 +253,7 @@ def train_trading_bot():
         
         start_time = time.time()
 
-        # --- Initialization for Vector Env ---
+        # --- Initialization for Vector Env ---------------------------------------------------------------------------------------------------------------------------
         # Reset all environments to get initial states
         states, infos = vec_env.reset()  # Returns initial observations for all environments
         
@@ -333,7 +333,7 @@ def train_trading_bot():
             # Each environment contributes one step per iteration
             total_done_steps += NUM_ENVS
 
-            # --- Training Step ---
+            # --- Training Step ----------------------------------------------------------------------------------------------------------------------------------------
             # Only train if we have enough experiences and it's time to learn
             # MIN_REPLAY_SIZE ensures diverse experiences before training starts
             # LEARNING_STEPS controls how often we perform training updates
