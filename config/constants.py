@@ -31,7 +31,7 @@ SLIPPAGE_FACTOR = 0.0005
 
 # Maximum number of trading steps allowed per episode
 # Prevents episodes from running indefinitely and controls training time
-MAX_STEPS_PER_EPISODE = 500
+MAX_STEPS_PER_EPISODE = 2000
 
 # --- Training Parameters ---
 # Number of parallel trading environments to run simultaneously
@@ -41,7 +41,7 @@ NUM_ENVS = 500
 
 # Total number of training steps across all environments
 # Higher values lead to better learning but longer training time
-# REDUCED: From 6000 to 1000 for much faster training
+# Episode is a training data
 TOTAL_STEPS = 3000 * MAX_STEPS_PER_EPISODE
 
 # Size of the experience replay buffer for storing past experiences
@@ -73,8 +73,8 @@ LEARNING_STEPS = 8  # Reduced frequency for faster training
 # Discount factor for future rewards in Q-learning
 # Values closer to 1 make the agent consider long-term rewards more heavily
 # LOWERED for high-frequency trading: focus on short-term volatility profits
-# 0.3-0.5 = day trading (immediate rewards), 0.7-0.85 = swing trading, 0.99 = long-term
-GAMMA = 0.4  # Optimized for catching small price swings and frequent trading
+# 0.1-0.3 = very short-term (scalping), 0.3-0.5 = day trading, 0.7-0.85 = swing trading, 0.99 = long-term
+GAMMA = 0.25  # Very low for aggressive short-term trading and catching corrections
 
 # --- Epsilon-greedy Exploration Parameters ---
 # Starting probability of taking random actions (exploration)
@@ -83,7 +83,7 @@ EPSILON_START = 1.0
 
 # Final probability of taking random actions after decay
 # INCREASED for active trading: maintain some exploration to find trading opportunities
-EPSILON_END = 0.15  # Higher than 0.05 to encourage more trading activity
+EPSILON_END = 0.30  # Very high exploration to encourage frequent trading
 
 # Number of timesteps over which to decay epsilon from start to end
 # Decay over 75% of total training time, then maintain minimum exploration
@@ -111,4 +111,15 @@ LSTM_DENSE_UNITS = 64        # Dense layer units after LSTM processing
 # --- Data File Path ---
 # Path to the JSON file containing historical market data
 # Must contain OHLCV (Open, High, Low, Close, Volume) data in API format
-JSON_FILE_PATH = 'market_data_1.json'  # IMPORTANT: Change this path if needed!
+JSON_FILE_PATH = 'market_data_2025-11-14-1.json'  # IMPORTANT: Change this path if needed!
+
+# --- Checkpoint Configuration ---
+# Number of training steps between checkpoint saves
+# Checkpoints allow training to be interrupted and resumed without losing progress
+CHECKPOINT_INTERVAL = 50000
+
+# Filename for the checkpoint state file (contains step count and replay buffer)
+CHECKPOINT_FILE = 'checkpoint.pkl'
+
+# Filename for the saved model checkpoint
+CHECKPOINT_MODEL = 'checkpoint_model.keras'

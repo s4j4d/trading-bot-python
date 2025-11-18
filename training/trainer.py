@@ -5,24 +5,22 @@ Main training functionality for the cryptocurrency trading bot.
 import tensorflow as tf
 import numpy as np
 import time
-import gc
 from collections import deque
 import random
 from gymnasium.vector import AsyncVectorEnv
-
-# Optional import for memory monitoring
-try:
-    import psutil
-    PSUTIL_AVAILABLE = True
-except ImportError:
-    PSUTIL_AVAILABLE = False
-    print("WARNING: psutil not available. Memory monitoring will be limited.")
 
 # Import from other modules
 from data import load_data_from_json
 from environment import CryptoTradingEnv
 from model import build_q_network
-from training.utils import linear_decay
+from training.utils import (
+    linear_decay, 
+    save_checkpoint, 
+    load_checkpoint,
+    _monitor_memory_usage,
+    _handle_memory_error,
+    PSUTIL_AVAILABLE
+)
 from config.constants import (
     WINDOW_SIZE,
     INITIAL_BALANCE,
@@ -38,47 +36,11 @@ from config.constants import (
     EPSILON_START,
     EPSILON_END,
     EPSILON_DECAY_TIMESTEPS,
-    JSON_FILE_PATH
+    JSON_FILE_PATH,
+    CHECKPOINT_INTERVAL,
+    CHECKPOINT_FILE,
+    CHECKPOINT_MODEL
 )
-
-
-def _monitor_memory_usage():
-    """
-    Monitors current memory usage and returns memory statistics.
-    
-    Returns:
-        dict: Memory usage statistics including RAM and GPU memory
-    """
-    memory_stats = {}
-    
-    # Monitor system RAM usage if psutil is available
-    if PSUTIL_AVAILABLE:
-        try:
-            ram = psutil.virtual_memory()
-            memory_stats['ram_used_gb'] = ram.used / (1024**3)
-            memory_stats['ram_available_gb'] = ram.available / (1024**3)
-            memory_stats['ram_percent'] = ram.percent
-        except Exception as e:
-            memory_stats['ram_error'] = str(e)
-    else:
-        # Fallback: provide default values when psutil is not available
-        memory_stats['ram_used_gb'] = 0.0
-        memory_stats['ram_available_gb'] = 4.0  # Assume 4GB available as fallback
-        memory_stats['ram_percent'] = 50.0
-        memory_stats['psutil_unavailable'] = True
-    
-    # Monitor GPU memory if available
-    gpus = tf.config.list_physical_devices('GPU')
-    if gpus:
-        try:
-            # Get GPU memory info
-            gpu_details = tf.config.experimental.get_memory_info('GPU:0')
-            memory_stats['gpu_current_mb'] = gpu_details['current'] / (1024**2)
-            memory_stats['gpu_peak_mb'] = gpu_details['peak'] / (1024**2)
-        except Exception as e:
-            memory_stats['gpu_error'] = str(e)
-    
-    return memory_stats
 
 
 def _adjust_batch_size_for_memory(initial_batch_size, memory_threshold_gb=0.5):
@@ -103,32 +65,6 @@ def _adjust_batch_size_for_memory(initial_batch_size, memory_threshold_gb=0.5):
         return adjusted_batch_size
     
     return initial_batch_size
-
-
-def _handle_memory_error(current_batch_size):
-    """
-    Handles memory errors by reducing batch size and cleaning up memory.
-    
-    Args:
-        current_batch_size (int): Current batch size that caused the error
-        
-    Returns:
-        int: New reduced batch size
-    """
-    # Force garbage collection
-    gc.collect()
-    
-    # Clear TensorFlow session if needed
-    try:
-        tf.keras.backend.clear_session()
-    except:
-        pass
-    
-    # Reduce batch size by half, but keep minimum of 8
-    new_batch_size = max(8, current_batch_size // 2)
-    print(f"Memory error encountered. Reducing batch size from {current_batch_size} to {new_batch_size}")
-    
-    return new_batch_size
 
 
 def train_trading_bot():
@@ -218,19 +154,34 @@ def train_trading_bot():
         print(f"  - Action size: {action_size}")
         print(f"  - Sequence length for temporal learning: {WINDOW_SIZE} time steps")
 
-        # --- Build Networks --------------------------------------------------------------------------------------------------------------------------------
-        # Main Q-network: learns to predict Q-values for state-action pairs
-        # This network is updated frequently during training
-        q_network = build_q_network(state_shape, action_size)
+        # --- Load Checkpoint or Build Networks --------------------------------------------------------------------------------------------------------------------------------
+        # Attempt to load checkpoint to resume training from previous state
+        checkpoint_step, checkpoint_model, checkpoint_buffer = load_checkpoint()
+        
+        if checkpoint_model is not None:
+            # Checkpoint exists - resume training from saved state
+            print(f"Resuming training from checkpoint at step {checkpoint_step}")
+            q_network = checkpoint_model
+            replay_buffer = checkpoint_buffer
+            total_done_steps = checkpoint_step
+        else:
+            # No checkpoint - start fresh training
+            print("No checkpoint found. Starting fresh training.")
+            # Main Q-network: learns to predict Q-values for state-action pairs
+            # This network is updated frequently during training
+            q_network = build_q_network(state_shape, action_size)
+            
+            # Experience replay buffer: stores past experiences for training
+            # Deque with maxlen automatically removes old experiences when full
+            replay_buffer = deque(maxlen=REPLAY_BUFFER_SIZE)
+            
+            # Initialize step counter
+            total_done_steps = 0
         
         # Target Q-network: provides stable targets for Q-value updates
         # This network is updated less frequently to prevent training instability
         target_network = build_q_network(state_shape, action_size)
         target_network.set_weights(q_network.get_weights())  # Initialize with same weights
-
-        # Experience replay buffer: stores past experiences for training
-        # Deque with maxlen automatically removes old experiences when full
-        replay_buffer = deque(maxlen=REPLAY_BUFFER_SIZE)
 
         # Initialize adaptive batch size for memory management
         # BATCH_SIZE is now optimized for LSTM training (reduced from 128 to 64)
@@ -258,7 +209,7 @@ def train_trading_bot():
         states, infos = vec_env.reset()  # Returns initial observations for all environments
         
         # Training progress tracking variables
-        total_done_steps = 0                                              # Total steps across all environments
+        # Note: total_done_steps is initialized during checkpoint loading or set to 0 for fresh training
         total_episodes_finished = 0                                  # Count of completed episodes
         episode_rewards = np.zeros(NUM_ENVS)                        # Current episode reward for each environment
         finished_episode_rewards = deque(maxlen=100)                # Rolling window of last 100 episode rewards
@@ -345,8 +296,9 @@ def train_trading_bot():
                     batch_size_to_use = min(current_batch_size, len(replay_buffer))
                     batch = random.sample(replay_buffer, batch_size_to_use)
 
-                    # Unpack batch into separate arrays for efficient processing
-                    # Each element contains: (state, action, reward, next_state, done)
+                    # Each of these variables is an array
+                    # batch = [(s1, a1, r1, ns1, d1), (s2, a2, r2, ns2, d2)]
+                    # Each of the variables : states_mb = np.array([s1, s2]) , actions_mb = np.array([a1, a2])
                     states_mb, actions_mb, rewards_mb, next_states_mb, dones_mb = map(np.array, zip(*batch))
 
                     # Convert numpy arrays to TensorFlow tensors for neural network processing
@@ -362,11 +314,14 @@ def train_trading_bot():
                     next_q_values_target = target_network(next_states_tensor, training=False)
 
                     # Apply Bellman equation to calculate target Q-values
+                    # the part beside the r is the future reward.
                     # Q*(s,a) = r + γ * max(Q*(s',a')) if not terminal, else r
                     target_max_q = tf.reduce_max(next_q_values_target, axis=1)  # Best Q-value for next state
                     # Multiply by (1.0 - dones_tensor) to zero out future rewards for terminal states
                     targets = rewards_tensor + GAMMA * target_max_q * (1.0 - dones_tensor)
 
+
+                    # for the automatic calculation of loss and updating the nwtwork we should use the fit function
                     # Use GradientTape to track operations for automatic differentiation
                     with tf.GradientTape() as tape:
                         # Get Q-values for current states from the main network
@@ -434,6 +389,12 @@ def train_trading_bot():
             # This provides stable learning targets and prevents training instability
             if total_done_steps % TARGET_UPDATE_FREQ_STEPS == 0 and total_done_steps > 0:
                 target_network.set_weights(q_network.get_weights())
+
+            # --- Save Checkpoint Periodically ---
+            # Save training progress at regular intervals to enable resuming training
+            # Checkpoint includes model weights, step count, and replay buffer
+            if total_done_steps % CHECKPOINT_INTERVAL == 0 and total_done_steps > 0:
+                save_checkpoint(total_done_steps, q_network, replay_buffer)
 
             # --- Logging ---
             # Print training progress at regular intervals

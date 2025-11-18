@@ -351,11 +351,6 @@ def build_q_network(input_shape, action_size):
     
     # Define model file paths in order of preference
     # Try most recent models first, then fall back to older ones
-    # model_paths = [
-    #     'final_parallel_trading_model.keras',  # Most recent parallel training model
-    #     'final_trading_model.keras',           # Single environment training model
-    #     'final_parallel_trading_model - Copy.keras'  # Backup copy if exists
-    # ]
 
     model_paths = ['final_parallel_trading_model.keras']
     

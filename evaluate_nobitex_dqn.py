@@ -352,6 +352,9 @@ class NobitexDataFetcher:
                 self.mean_ = mean
                 self.scale_ = std
         
+        # Calculate mean and std for the scaler (though not used in this normalization approach)
+        mean = np.mean(normalized_features, axis=0)
+        std = np.std(normalized_features, axis=0)
         scaler = SimpleScaler(mean, std)
         
         print(f"Features prepared: {features}")

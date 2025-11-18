@@ -2,7 +2,7 @@ from data.loader import load_data_from_json
 import json
 
 # Look at your training data
-df_crypto = load_data_from_json("market_data_1.json")
+df_crypto = load_data_from_json("market_data.json")
 
 print("DataFrame columns:", df_crypto.columns.tolist())
 print("DataFrame shape:", df_crypto.shape)

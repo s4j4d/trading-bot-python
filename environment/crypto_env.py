@@ -78,11 +78,11 @@ class CryptoTradingEnv(gym.Env):
         # Action space: 0=Hold, 1=Buy, 2=Sell
         self.action_space = spaces.Discrete(3)
         
-        # Observation space: window of historical OHLCV data
-        # Shape: (window_size, 5) for natural 2D structure [timesteps, features]
-        # This is more efficient than flattening - no need to reshape later!
+        # Observation space: window of historical OHLCV data + position indicator
+        # Shape: (window_size, 6) - 5 OHLCV features + 1 position indicator
+        # Position indicator: 0 = holding cash, 1 = holding crypto
         self.observation_space = spaces.Box(
-            low=0, high=np.inf, shape=(self.window_size, 5), dtype=np.float32
+            low=0, high=np.inf, shape=(self.window_size, 6), dtype=np.float32
         )
 
         # Trading state variables (initialized here, set in reset())
@@ -91,6 +91,8 @@ class CryptoTradingEnv(gym.Env):
         self.holdings = 0.0                      # Current cryptocurrency holdings
         self.initial_portfolio_value = 0.0       # Portfolio value at episode start
         self.previous_portfolio_value = 0.0      # Portfolio value from previous step
+        self.last_buy_price = 0.0                # Track last buy price for profit calculation
+        self.last_sell_price = 0.0               # Track last sell price
 
     def reset(self, seed=None, options=None):
         """
@@ -114,6 +116,8 @@ class CryptoTradingEnv(gym.Env):
         self.holdings = 0.0                          # Start with no cryptocurrency
         self.initial_portfolio_value = self.initial_balance  # Record starting portfolio value
         self.previous_portfolio_value = self.initial_balance # Initialize previous value
+        self.last_buy_price = 0.0                    # Reset last buy price
+        self.last_sell_price = 0.0                   # Reset last sell price
 
         # Get initial observation and info
         state = self._get_observation()
@@ -130,7 +134,7 @@ class CryptoTradingEnv(gym.Env):
         # Check if the *next* step would exceed the data frame length or max_steps
         if self.current_step >= len(self.df) - 1 or (self.current_step - (self.window_size - 1)) >= self.max_steps :
              # If already at or beyond the limit, return previous state and indicate done
-             current_price = self._get_current_price() # Price at the terminal step
+             current_price = self._get_current_closing_price() # Price at the terminal step
              current_portfolio_value = self.balance + self.holdings * current_price
              reward = 0 # No change in value at the terminal step itself
              done = True
@@ -147,7 +151,7 @@ class CryptoTradingEnv(gym.Env):
              return state, reward, done, truncated, info
 
         # --- Proceed with normal step ---
-        current_price = self._get_current_price()
+        current_price = self._get_current_closing_price()
         value_before_action = self.balance + self.holdings * current_price
 
         # --- Execute action ---
@@ -160,6 +164,7 @@ class CryptoTradingEnv(gym.Env):
                 crypto_bought = cash_after_fee / effective_price
                 self.holdings += crypto_bought
                 self.balance = 0.0
+                self.last_buy_price = effective_price  # Track buy price
             else:
                  warnings.warn(f"Step {self.current_step}: Buy skipped due to near-zero effective price.", RuntimeWarning)
 
@@ -171,6 +176,7 @@ class CryptoTradingEnv(gym.Env):
             cash_received_after_fee = cash_received_before_fee - fee
             self.balance += cash_received_after_fee
             self.holdings = 0.0
+            self.last_sell_price = effective_price  # Track sell price
 
         # --- Update state and check termination ---
         self.current_step += 1 # Increment step *after* calculations based on current_step
@@ -181,11 +187,41 @@ class CryptoTradingEnv(gym.Env):
 
         done = terminated or truncated
 
-        # --- Calculate reward ---
+        # --- Calculate reward --------------------------------------------------------------------------------------------------------------------------------------
         # Use the price corresponding to the *new* current_step
-        price_for_value_calc = self._get_current_price()
+        price_for_value_calc = self._get_current_closing_price()
         current_portfolio_value = self.balance + self.holdings * price_for_value_calc
-        reward = current_portfolio_value - self.previous_portfolio_value
+        
+        # Base reward: change in portfolio value (normalized by portfolio size)
+        portfolio_change = current_portfolio_value - self.previous_portfolio_value
+        reward = portfolio_change / self.initial_balance * 10000  # Scale up for better learning
+        
+        # AGGRESSIVE: Penalize holding positions (encourages active trading)
+        if action == 0:  # Hold action
+            if self.holdings > 1e-8:  # Holding crypto
+                # Penalty scales with portfolio value
+                reward -= 500  # Fixed penalty for holding crypto
+            elif self.balance > 1e-6:  # Holding cash
+                reward -= 300  # Fixed penalty for holding cash
+        
+        # STRONG BONUS: Reward successful trades
+        if action == 1 and self.balance < 1e-6:  # Successfully bought (now all-in crypto)
+            reward += 200  # Bonus for executing buy
+            
+        elif action == 2 and self.holdings < 1e-8:  # Successfully sold (now all cash)
+            reward += 200  # Bonus for executing sell
+        
+        # EXTRA BONUS: Reward good trade timing (buy low, sell high)
+        if action == 1 and self.last_sell_price > 1e-9:  # Just bought after selling
+            if current_price < self.last_sell_price:
+                price_improvement = (self.last_sell_price - current_price) / self.last_sell_price
+                reward += 5000 * price_improvement  # Big bonus for buying the dip
+        
+        elif action == 2 and self.last_buy_price > 1e-9:  # Just sold after buying
+            if current_price > self.last_buy_price:
+                profit_margin = (current_price - self.last_buy_price) / self.last_buy_price
+                reward += 5000 * profit_margin  # Big bonus for selling high
+        
         self.previous_portfolio_value = current_portfolio_value
 
         # --- Get next observation and info ---
@@ -200,7 +236,7 @@ class CryptoTradingEnv(gym.Env):
 
         return next_state, reward, terminated, truncated, info # Return terminated and truncated separately
 
-    def _get_current_price(self):
+    def _get_current_closing_price(self):
         """
         Get the current market price at the current step.
         
@@ -214,11 +250,11 @@ class CryptoTradingEnv(gym.Env):
 
     def _get_observation(self):
          """
-         Get observation with all OHLCV features for better market understanding.
+         Get observation with all OHLCV features + position indicator.
          
          Returns:
-             np.ndarray: Flattened array of normalized OHLCV data
-                        Shape: (window_size * 5,) containing [open, high, low, close, volume]
+             np.ndarray: Array of normalized OHLCV data + position
+                        Shape: (window_size, 6) containing [open, high, low, close, volume, position]
          """
          # Ensure index is within bounds for observation window
          safe_step = min(self.current_step, len(self.df) - 1)
@@ -258,12 +294,18 @@ class CryptoTradingEnv(gym.Env):
              if safe_step >= self.window_size:
                   warnings.warn(f"Near-zero price encountered at step {safe_step}, observation may be unreliable.", RuntimeWarning)
 
-         # Return as 2D array: natural shape (window_size, 5)
-         # No need to flatten - more efficient and clearer!
-         if normalized_data.shape != (self.window_size, 5):
-              raise ValueError(f"Observation shape incorrect at step {self.current_step}. Expected ({self.window_size}, 5), got {normalized_data.shape}")
+         # Add position indicator column (0 = cash, 1 = crypto)
+         position_indicator = 1.0 if self.holdings > 1e-8 else 0.0
+         position_column = np.full((self.window_size, 1), position_indicator, dtype=np.float32)
+         
+         # Concatenate position indicator to observation
+         observation = np.hstack([normalized_data, position_column])
 
-         return normalized_data.astype(np.float32)
+         # Validate shape
+         if observation.shape != (self.window_size, 6):
+              raise ValueError(f"Observation shape incorrect at step {self.current_step}. Expected ({self.window_size}, 6), got {observation.shape}")
+
+         return observation.astype(np.float32)
 
     def _get_info(self):
         """
@@ -276,6 +318,6 @@ class CryptoTradingEnv(gym.Env):
             "step": self.current_step,                    # Current step number in episode
             "balance": self.balance,                      # Current cash balance
             "holdings": self.holdings,                    # Current cryptocurrency holdings
-            "current_price": self._get_current_price(),   # Current market price
+            "current_price": self._get_current_closing_price(),   # Current market price
             "portfolio_value": self.previous_portfolio_value  # Total portfolio value (cash + holdings value)
         }
