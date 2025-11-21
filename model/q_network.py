@@ -93,10 +93,10 @@ def _validate_input_shape(input_shape):
         raise TypeError(f"Input shape dimensions must be integers, got {input_shape}")
     
     # Validate number of features
-    if num_features != 5:
+    if num_features != 6:
         raise ValueError(
-            f"Expected 5 features (OHLCV), got {num_features}. "
-            f"Input shape should be (window_size, 5)"
+            f"Expected 6 features (OHLCV), got {num_features}. "
+            f"Input shape should be (window_size, 6)"
         )
     
     # Window size range validation for LSTM temporal learning

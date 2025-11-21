@@ -14,3 +14,7 @@ The module provides:
 Usage:
     from config.constants import WINDOW_SIZE, INITIAL_BALANCE
 """
+
+from .constants import *
+
+__all__ = ['*']

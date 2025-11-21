@@ -153,30 +153,41 @@ class CryptoTradingEnv(gym.Env):
         # --- Proceed with normal step ---
         current_price = self._get_current_closing_price()
         value_before_action = self.balance + self.holdings * current_price
+        
+        # Track if action was invalid
+        invalid_action = False
 
         # --- Execute action ---
-        if action == 1 and self.balance > 1e-6:  # Buy
-            effective_price = current_price * (1 + self.slippage_factor)
-            buy_amount_in_cash = self.balance
-            fee = buy_amount_in_cash * self.fee_rate
-            cash_after_fee = buy_amount_in_cash - fee
-            if effective_price > 1e-9:
-                crypto_bought = cash_after_fee / effective_price
-                self.holdings += crypto_bought
-                self.balance = 0.0
-                self.last_buy_price = effective_price  # Track buy price
+        if action == 1:  # Buy
+            if self.balance > 1e-6:  # Has cash to buy
+                effective_price = current_price * (1 + self.slippage_factor)
+                buy_amount_in_cash = self.balance
+                fee = buy_amount_in_cash * self.fee_rate
+                cash_after_fee = buy_amount_in_cash - fee
+                if effective_price > 1e-9:
+                    crypto_bought = cash_after_fee / effective_price
+                    self.holdings += crypto_bought
+                    self.balance = 0.0
+                    self.last_buy_price = effective_price  # Track buy price
+                else:
+                    warnings.warn(f"Step {self.current_step}: Buy skipped due to near-zero effective price.", RuntimeWarning)
             else:
-                 warnings.warn(f"Step {self.current_step}: Buy skipped due to near-zero effective price.", RuntimeWarning)
+                # Invalid: trying to buy with no cash
+                invalid_action = True
 
-        elif action == 2 and self.holdings > 1e-8:  # Sell
-            effective_price = current_price * (1 - self.slippage_factor)
-            sell_amount_in_crypto = self.holdings
-            cash_received_before_fee = sell_amount_in_crypto * effective_price
-            fee = cash_received_before_fee * self.fee_rate
-            cash_received_after_fee = cash_received_before_fee - fee
-            self.balance += cash_received_after_fee
-            self.holdings = 0.0
-            self.last_sell_price = effective_price  # Track sell price
+        elif action == 2:  # Sell
+            if self.holdings > 1e-8:  # Has crypto to sell
+                effective_price = current_price * (1 - self.slippage_factor)
+                sell_amount_in_crypto = self.holdings
+                cash_received_before_fee = sell_amount_in_crypto * effective_price
+                fee = cash_received_before_fee * self.fee_rate
+                cash_received_after_fee = cash_received_before_fee - fee
+                self.balance += cash_received_after_fee
+                self.holdings = 0.0
+                self.last_sell_price = effective_price  # Track sell price
+            else:
+                # Invalid: trying to sell with no crypto
+                invalid_action = True
 
         # --- Update state and check termination ---
         self.current_step += 1 # Increment step *after* calculations based on current_step
@@ -192,35 +203,53 @@ class CryptoTradingEnv(gym.Env):
         price_for_value_calc = self._get_current_closing_price()
         current_portfolio_value = self.balance + self.holdings * price_for_value_calc
         
-        # Base reward: change in portfolio value (normalized by portfolio size)
-        portfolio_change = current_portfolio_value - self.previous_portfolio_value
-        reward = portfolio_change / self.initial_balance * 10000  # Scale up for better learning
-        
-        # AGGRESSIVE: Penalize holding positions (encourages active trading)
-        if action == 0:  # Hold action
-            if self.holdings > 1e-8:  # Holding crypto
-                # Penalty scales with portfolio value
-                reward -= 500  # Fixed penalty for holding crypto
-            elif self.balance > 1e-6:  # Holding cash
-                reward -= 300  # Fixed penalty for holding cash
-        
-        # STRONG BONUS: Reward successful trades
-        if action == 1 and self.balance < 1e-6:  # Successfully bought (now all-in crypto)
-            reward += 200  # Bonus for executing buy
+        # CRITICAL: Massive penalty for invalid actions
+        if invalid_action:
+            reward = -5000  # Huge penalty for trying to buy without cash or sell without crypto
+        else:
+            # Base reward: change in portfolio value (normalized by portfolio size)
+            portfolio_change = current_portfolio_value - self.previous_portfolio_value
+            reward = portfolio_change / self.initial_balance * 10000  # Scale up for better learning
             
-        elif action == 2 and self.holdings < 1e-8:  # Successfully sold (now all cash)
-            reward += 200  # Bonus for executing sell
-        
-        # EXTRA BONUS: Reward good trade timing (buy low, sell high)
-        if action == 1 and self.last_sell_price > 1e-9:  # Just bought after selling
-            if current_price < self.last_sell_price:
-                price_improvement = (self.last_sell_price - current_price) / self.last_sell_price
-                reward += 5000 * price_improvement  # Big bonus for buying the dip
-        
-        elif action == 2 and self.last_buy_price > 1e-9:  # Just sold after buying
-            if current_price > self.last_buy_price:
-                profit_margin = (current_price - self.last_buy_price) / self.last_buy_price
-                reward += 5000 * profit_margin  # Big bonus for selling high
+            # MODERATE: Penalize holding positions (encourages active trading)
+            if action == 0:  # Hold action
+                if self.holdings > 1e-8:  # Holding crypto
+                    # Moderate penalty for holding crypto
+                    reward -= 100  # Reduced from 2000 - less aggressive
+                elif self.balance > 1e-6:  # Holding cash
+                    reward -= 50   # Reduced from 1500 - less aggressive
+            
+            # STRONG BONUS: Reward successful trades
+            if action == 1 and self.balance < 1e-6:  # Successfully bought (now all-in crypto)
+                reward += 500  # Increased from 200
+                
+            elif action == 2 and self.holdings < 1e-8:  # Successfully sold (now all cash)
+                reward += 500  # Increased from 200
+            
+            # SMART BONUS: Reward good trade timing with trend awareness
+            if action == 1 and self.last_sell_price > 1e-9:  # Just bought after selling
+                if current_price < self.last_sell_price:
+                    price_improvement = (self.last_sell_price - current_price) / self.last_sell_price
+                    reward += 2000 * price_improvement  # Reduced from 10000 - less aggressive
+            
+            elif action == 2 and self.last_buy_price > 1e-9:  # Just sold after buying
+                if current_price > self.last_buy_price:
+                    profit_margin = (current_price - self.last_buy_price) / self.last_buy_price
+                    reward += 2000 * profit_margin  # Reduced from 10000 - less aggressive
+            
+            # TREND FOLLOWING: Bonus for trading with short-term momentum
+            if len(self.df) > self.current_step + 1:
+                # Calculate short-term price change (last 3 steps)
+                lookback = min(3, self.current_step - (self.window_size - 1))
+                if lookback > 0:
+                    past_price = self._get_price_at_step(self.current_step - lookback)
+                    price_trend = (current_price - past_price) / past_price
+                    
+                    # Reward buying in downtrends (buy the dip) and selling in uptrends
+                    if action == 1 and price_trend < -0.01:  # Buy during 1%+ dip
+                        reward += 300
+                    elif action == 2 and price_trend > 0.01:  # Sell during 1%+ rise
+                        reward += 300
         
         self.previous_portfolio_value = current_portfolio_value
 
@@ -246,6 +275,19 @@ class CryptoTradingEnv(gym.Env):
         # Ensure index is within bounds to prevent IndexError
         # If current_step exceeds data length, use the last available price
         safe_step = min(self.current_step, len(self.df) - 1)
+        return float(self.df.iloc[safe_step]['close'])
+    
+    def _get_price_at_step(self, step):
+        """
+        Get the price at a specific step.
+        
+        Args:
+            step: The step to get price for
+            
+        Returns:
+            float: Closing price at that step
+        """
+        safe_step = min(max(0, step), len(self.df) - 1)
         return float(self.df.iloc[safe_step]['close'])
 
     def _get_observation(self):

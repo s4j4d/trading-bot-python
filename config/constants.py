@@ -31,7 +31,7 @@ SLIPPAGE_FACTOR = 0.0005
 
 # Maximum number of trading steps allowed per episode
 # Prevents episodes from running indefinitely and controls training time
-MAX_STEPS_PER_EPISODE = 2000
+MAX_STEPS_PER_EPISODE = 1500
 
 # --- Training Parameters ---
 # Number of parallel trading environments to run simultaneously
@@ -39,10 +39,12 @@ MAX_STEPS_PER_EPISODE = 2000
 # INCREASED: Using more environments to utilize available CPU/memory resources
 NUM_ENVS = 500
 
+EPISODES = 1500
+
 # Total number of training steps across all environments
 # Higher values lead to better learning but longer training time
 # Episode is a training data
-TOTAL_STEPS = 3000 * MAX_STEPS_PER_EPISODE
+TOTAL_STEPS = EPISODES * MAX_STEPS_PER_EPISODE
 
 # Size of the experience replay buffer for storing past experiences
 # Larger buffers provide more diverse training data but use more memory
@@ -74,16 +76,16 @@ LEARNING_STEPS = 8  # Reduced frequency for faster training
 # Values closer to 1 make the agent consider long-term rewards more heavily
 # LOWERED for high-frequency trading: focus on short-term volatility profits
 # 0.1-0.3 = very short-term (scalping), 0.3-0.5 = day trading, 0.7-0.85 = swing trading, 0.99 = long-term
-GAMMA = 0.25  # Very low for aggressive short-term trading and catching corrections
+GAMMA = 0.7  # Higher for better planning and avoiding bad trades
 
 # --- Epsilon-greedy Exploration Parameters ---
 # Starting probability of taking random actions (exploration)
 # Higher values encourage more initial exploration
-EPSILON_START = 1.0
+EPSILON_START = 0.5
 
 # Final probability of taking random actions after decay
 # INCREASED for active trading: maintain some exploration to find trading opportunities
-EPSILON_END = 0.30  # Very high exploration to encourage frequent trading
+EPSILON_END = 0.10  # Lower exploration for more consistent trading decisions
 
 # Number of timesteps over which to decay epsilon from start to end
 # Decay over 75% of total training time, then maintain minimum exploration

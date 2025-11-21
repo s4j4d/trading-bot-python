@@ -195,6 +195,7 @@ def train_trading_bot():
         print(f"  - Window size: {WINDOW_SIZE} (optimized for temporal learning)")
         print(f"  - Target update frequency: {TARGET_UPDATE_FREQ_STEPS} steps")
         print(f"  - Learning frequency: every {LEARNING_STEPS} steps")
+        print(f"  - Training steps: {TOTAL_STEPS}")
         
         # Log initial memory usage
         initial_memory = _monitor_memory_usage()
@@ -220,8 +221,7 @@ def train_trading_bot():
             # --- Epsilon-greedy action selection for all environments ---
             # Calculate current exploration probability (epsilon) using linear decay
             # Starts high for exploration, decreases over time for exploitation
-            # epsilon = linear_decay(total_done_steps, EPSILON_DECAY_TIMESTEPS, EPSILON_START, EPSILON_END)
-            epsilon = 0.2
+            epsilon = linear_decay(total_done_steps, EPSILON_DECAY_TIMESTEPS, EPSILON_START, EPSILON_END)
 
             if np.random.rand() < epsilon:
                 # Exploration: Take random actions to discover new strategies
@@ -384,7 +384,7 @@ def train_trading_bot():
                     # Continue training but log the error
                     continue
 
-            # --- Update Target Network Periodically ---
+            # --- Update Target Network Periodically ----------------------------------------------------------------------------------------------------------------------
             # Copy weights from main network to target network at regular intervals
             # This provides stable learning targets and prevents training instability
             if total_done_steps % TARGET_UPDATE_FREQ_STEPS == 0 and total_done_steps > 0:
